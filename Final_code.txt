@@ -1,0 +1,494 @@
+// BME 354 Final Project (Lab 10): FitBling IoT Pedometer  
+// Duke Pratt School of Engineering 
+// Instructor: Dr. Kathy Nightingale 
+// Submitted December 3, 2015 
+// Written by Jason Liu and April Pun 
+// Written in the Spark/Particle Integrated Development Environment (IDE) 
+// Spark/Particle Photon connected to: 
+//      -SparkFun LSM9DS1 Inertial Measurement Unit (IMU) Shield w/ 9 degrees of freedom.  
+//Communicates with I2C. Uses SparkFunLSM9DS1 library 
+//      -DIYmall .96" OLED display. Communicates with I2C. Uses Adafruit_SSD1306 library  
+//(with GFX library) 
+//      -SD card/reader/writer. Communicates with SPI. Uses SD-card-library-phton-compat library. 
+//      -Frankenstein'd LiPo battery and power regulator from a external USB battery pack.  
+ 
+ 
+/* 
+ 
+The FitBling has several modular segments to how the code operates. There are 5 core functions, which are the 
+base for all other functionality.  
+The current build of the FitBling has the following core functions, with dependencies listed with each: 
+    1) Step Detection 
+        -IMU Shield reports gyroscopic information 
+        -Gyroscopic Magnitude Peak detection and threshold levels are used together for step detection. 
+            -Peak detection is admittedly very primitive, but with proper signal processing and pattern  
+recognition, this can be improved. 
+            -using MATLAB and data analysis, threshold values were determined, and peak detection developed.  
+ 
+    2) Activity Level Detection 
+        -IMU Shield reports Accelerometer information 
+        -Average Acceleration Magnitude informs the level of activity 
+            -using MATLAB and data analysis, threshold values were determined.  
+ 
+    3) Time Tracking 
+        -Uses millis() to track time elapsed 
+        -If the Activity level is Low for 20 seconds, the display turns off to save battery 
+        -Every 4 seconds, the display will change between two screens.  
+        -every 8 seconds, the Photon will use WiFi to report steps or activity level, alternating with each  
+report.  
+ 
+    4) Display Management 
+        -OLED display is admittedly smaller than the Adafruit RGD LCD, but: 
+            -OLED display has higher resolution, and thus can draw different fonts of text 
+            -can manipulate individual pixels and thus can be expandable to improve the User Interface 
+ with drawn shapes. 
+        -on setup, displays a splash screen with the name of the device, the FitBling, and our names 
+        -in main loop, displays two different screens that alternate every 4 seconds 
+            -the first screen shows: 
+                -first line in yellow: the activity level (Low, Moderate, High) 
+                -second line in blue: steps recorded from the most recent device reset.  
+                -third line in blue: lifetime steps (stored in EEPROM ) 
+                -fourth line in blue: instantaneous acceleration 
+                -fifth line in blue: distance travelled in miles  
+            -the second screen shows: 
+                -the number of steps left since the most recent reset to reach 10,000 steps 
+            -additional screens are very easy to add-- very expandable 
+ 
+    5) Data Management 
+        -Stores lifetime steps in EEPROM, in the 2nd index. 
+        -Stores changes in activity level and the milliseconds since the program began in SD card. 
+        -Uses WiFi to report resetable steps and activity level in a google spreadsheet. 
+         
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+These five core functions give way to the full set of available functionality: 
+    Baseline functionality as required by Lab 10 Handout: 
+        -Monitors footfalls, regardless of orientation of device 
+        -Display shows both lifetime footfalls and resettable footfalls 
+        -Display shows current level of activity (low, moderate, high) 
+        -Every time level of activity changes, millis() and this new level is recorded in an SD card 
+        -Display shows moment to moment acceleration on all three axes, updated faster than once per second 
+ 
+    Extra functionality: 
+        -Gyroscopic and accelerometer data used for more advanced step detection 
+        -Accelerometer scale automatically adjusts G's range between 2 and 4 to prevent clipping. 
+        -Multiple Screen displays to display more information 
+        -Rechargeable LiPo Battery 
+        -Estimates distance travelled in miles 
+        -Displays steps left to reach a goal 
+        -Display shuts off after 20 seconds when at low activity level to conserve battery life 
+            -can be shaken to wake up the screen. 
+        -Connects to WiFi, reports steps and activity level to Particle cloud 
+            -IFTTT recipe was made to convert these reports to data entries in Google Spreadsheet 
+        <<<HARDWARE functionality>>> 
+        -developed to be held in the hand when walking 
+        -premium, gold-painted wood finish, with two panels of clear acrylic to observe interior. 
+        -1.2 inches cubed removed from original FitBrick. Better form factor for holding. 
+        -Particle Photon still has ~80% flash memory even with all these variables. this means the 
+            device is still very much expandable in terms of functionality that can be added and variables 
+            that can potentially be tracked.  
+ 
+Future Functionality/Limitations: 
+    -Improved step detection via pattern recognition/machine learning 
+        -the Photons massive memory storage allows for many, many more variables to be stored. 
+    -Use of the Magnometer to give the use a magnetic heading to know where north is. 
+    -no buttons to allow the user to interface with the device. 
+        -However, using IFTTT, an iOS application can communicate with the Photon. 
+        -Once this is established, the step thresholds can be catered to specific individuals 
+    -WiFi module cannot be deactivated by code without the device being unable to flash new firmware/programs 
+        -Code can be written to get around this, but given the timeframe for this project, having this error 
+            will cause major problems in development, so this was avoided. 
+        -the WiFi module is the biggest power draw of the device, but the battery can support the Photon  
+for at least 3 hours. this limit was previously stress-tested. 
+    -Device will be stuck in a loop trying to find WiFi if no available wifi networks are available. 
+        -because the device was connected to the Duke network and Duke has fantastic wifi coverage, 
+this is not an issue on campus. 
+    -SD card cannot be removed from the device while it is on, or activity level will stop being recorded. 
+        -Extra code can be used to re-initialize the SD card, but have yet to experiment with this. 
+    -Photon+shield together took up the most space in the FitBling. Because no breakout board  
+was available immediately, this was the largest physical space limitation for the FitBling case. 
+     
+This ends the technical overview of the FitBling.  
+Thank you for spending the time to read this, and I hope this guide was helpful in introducing this device that 
+April and I have worked hard to develop. 
+ 
+The code can be found on the following page.  
+*/ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+/* 
+ 
+<<<LIBRARIES>>> 
+ 
+These include statements declare the libraries used: 
+ 
+The SD card library 
+The IMU shield (accelerometer, gyrometer, etc) 
+the OLED display  
+ 
+File myfile, LSM9DS1 imu, and Adafruit_SSD1306 display(OLED_RESET) are the objects created by the libraries 
+these objects allow interations with the components of the device, with variables stored within these objects. 
+these variables can be read and written.  
+ 
+the SD card library requires the specific pins used for SPI communication to be established. this also helps keep pins straight. 
+the LSM library requires a little more initialization because of the 9 measured values it reports.  
+the SSD1306 library (used for the OLED display) has a reset pin on the adafruit OLED display. this DIYmall display does not have 
+this pin, 
+    but this code is left in here anyways.  
+     
+*/ 
+ 
+#include "sd-card-library-photon-compat/sd-card-library-photon-compat.h" 
+File myFile; 
+const uint8_t mosiPin    = A5; 
+const uint8_t misoPin    = A4; 
+const uint8_t clockPin   = A3; 
+const uint8_t chipSelect = A2; 
+ 
+#include "SparkFunLSM9DS1/SparkFunLSM9DS1.h" 
+#include "math.h" 
+LSM9DS1 imu; 
+#define LSM9DS1_M0x1E  // Would be 0x1C if SDO_M is LOW 
+#define LSM9DS1_AG0x6B  // Would be 0x6A if SDO_AG is LOW 
+#define DECLINATION 11.48 // Declination (degrees) in Durham, NC 
+ 
+#include "Adafruit_SSD1306/Adafruit_SSD1306.h" 
+ 
+#define OLED_RESET D4 
+Adafruit_SSD1306 display(OLED_RESET); 
+ 
+/* 
+<<<GLOBAL VARIABLES ||| VARIABLE DICTIONARY>>> 
+ 
+these variables are initialized outside of the loops/functions to be able to be used anywhere required.  
+ 
+steps is a count of resettable steps 
+lifesteps is a count of EEPROM-stored lifetime steps 
+arrInitcount is the index value for past measured acceleration/gyroscopic magnitudes. this will be used in a for loop. 
+xyzAccel stores the X, Y, and Z acceleration values in each read. 
+aclArray stores the 3 most recently read acceleration magnitudes 
+avAcl is the average of the 3 most recently read acceleration magnitudes, used to estimate activity level 
+activState reports the current Activity level. 0 means low, 1 means moderate, and 2 means high. 
+xyzGyro stores the X, Y, and Z gyroscope values in each read. 
+gyrArray stores the 3 most recently read gyroscope magnitudes 
+sleepdisplay controls whether or not the display goes to sleep. TRUE turns it off, FALSE turns it on. 
+    will be turned TRUE with firstsleepcheck, and turned FALSE when activity level is not low 
+firstsleepcheck is a long that stores the millis once a low activity level is first found. if this is less than 20 seconds  
+    compared to millis() in another pass, it turns sleepdisplay to TRUE. 
+update controls whether or not the device will send out current steps and activity level to the Google Spreadsheet 
+updatetime controls when the update is sent.  
+switcher controls when display screen will be changed.  
+displayswitcher controls which screen to display. 
+     
+*/ 
+int steps; 
+int lifesteps; 
+int arrInitCount=0; 
+double xyzAccel[3]; 
+double aclArray[3]; 
+double avAcl; 
+int activState; 
+double xyzGyro[3]; 
+double gyrArray[3]; 
+bool sleepdisplay; 
+long firstsleepcheck; 
+bool update=FALSE; 
+long updatetime=0; 
+bool switcher=TRUE; 
+long displayswitch=0; 
+int displayswitcher=2; 
+ 
+/* 
+<<<SETUP>>> 
+activates the display and displays the initial splashscreen with displayer(1,0,0), a custom, created function. 
+ 
+establishes the addresses used for the IMU for I2C communication. displays an error if this fails 
+ 
+establishes the pins used for SD card SPI communication. If it is not connected, it will stall while being connected 
+    to the cloud, so that new firmware is still able to be flashed to the device. 
+ 
+Publishes the current build to the ERRORLOG text file on the SD card to show that the firmware was succesfully flashed 
+ 
+Publishes a line divider/header in actLOG text file on the SD card to delineate a reset 
+ 
+sets setps to 0 
+gets lifesteps from EEPROM 
+delay 1 second to fully appreciate the splashscreen. 
+ 
+*/ 
+ 
+void setup()    
+    {     
+        sleepdisplay=FALSE; 
+        display.begin(SSD1306_SWITCHCAPVCC, 0x3C);   
+        displayer(1,0,0); 
+         
+        imu.settings.device.commInterface = IMU_MODE_I2C; 
+        imu.settings.device.mAddress = LSM9DS1_M; 
+        imu.settings.device.agAddress = LSM9DS1_AG; 
+        if(!imu.begin()) 
+            { 
+                display.clearDisplay(); 
+                display.setTextSize(2); 
+                display.println("IMU FAIL"); 
+                display.display(); 
+            } 
+         
+        while(!SD.begin(mosiPin, misoPin, clockPin, chipSelect))  
+            { 
+                Particle.process(); 
+            } 
+        myFile = SD.open("ERRORLOG.txt", FILE_WRITE); 
+        if (myFile)  
+            { 
+                myFile.println("FitBling Build Successful. 12.3.2015, Final Presentation Build"); 
+                myFile.close(); 
+            } 
+        myFile = SD.open("actLOG.txt", FILE_WRITE); 
+        if (myFile)  
+            { 
+                myFile.println("Bling-Bling. Bling-Bling. Activity log active."); 
+                myFile.close(); 
+            } 
+        int steps=0; 
+        EEPROM.get(2,lifesteps); 
+        delay(1000); 
+    } 
+ 
+ 
+void loop()  
+    { 
+        long loopbegintime=millis(); //keeps track of millis at the beginning of the main loop 
+         
+        imu.readAccel();    //reads acceleration from the IMU 
+        xyzAccel[0]=imu.calcAccel(imu.ax);  //stores XYZ acceleration in this array 
+        xyzAccel[1]=imu.calcAccel(imu.ay); 
+        xyzAccel[2]=imu.calcAccel(imu.az); 
+   
+        if( (xyzAccel[0]>1.90) | (xyzAccel[1] > 1.90) | (xyzAccel[2] > 1.90))   //adjusts the accelerometer scale if the data is 
+at rails. 
+            { 
+                imu.setAccelScale(4); 
+            } 
+        else 
+            { 
+                imu.setAccelScale(2); 
+            } 
+   
+        imu.readGyro(); // reads gyroscope 
+        xyzGyro[0]=imu.calcGyro(imu.gx);    //stores XYZ gyroscopic data in this array 
+        xyzGyro[1]=imu.calcGyro(imu.gy); 
+        xyzGyro[2]=imu.calcGyro(imu.gz); 
+   
+        double accel=sqrt(pow(xyzAccel[0],2)+pow(xyzAccel[1],2)+pow(xyzAccel[2],2));    //finds magnitude of acceleration 
+   
+        double gyro=sqrt(pow(xyzGyro[0],2)+pow(xyzGyro[1],2)+pow(xyzGyro[2],2));    //finds magnitude of gyroscopic motion 
+   
+        if(arrInitCount<3) //stores the first 3 accel/gyro values.  
+            { 
+                aclArray[arrInitCount]=accel; 
+                gyrArray[arrInitCount]=gyro; 
+                arrInitCount++; 
+            } 
+       
+        else 
+            { 
+                for(int count=0; count<2; count++)  // shifts each entry down one index, and stores latest data in [2] index 
+                    { 
+                        aclArray[count]=aclArray[count+1]; 
+                        gyrArray[count]=gyrArray[count+1]; 
+                    } 
+                aclArray[2]=accel; 
+                gyrArray[2]=gyro; 
+                 
+                // average acceleration measure degree of motion (and thus activity level) via accelerometer magnitude 
+                avAcl=((aclArray[0]+aclArray[1]+aclArray[2])/3); 
+                // peak detection 
+                if (((gyrArray[1]>gyrArray[0]) & (gyrArray[1]>gyrArray[2])) & (gyrArray[1]>100)) //primitive peak detection 
+                    { 
+                        steps=steps+1; 
+                        lifesteps=lifesteps+1; 
+                        EEPROM.put(2,lifesteps);    //stores lifetime steps in EEPROM 
+                        delay(100);               //delays a bit to prevent an extra step to be detected too quickly. 
+                    } 
+                if (avAcl<1.4)  //if average acceleration is less than 1.4, this is a low activity state. 
+                    { 
+                        if(activState!=0)   //if it was not previously low, then write to SD card! 
+                            { 
+                                myFile = SD.open("actLOG.txt", FILE_WRITE); 
+                                if (myFile)  
+                                    { 
+                                        myFile.print("Low"); myFile.print(" "); myFile.println(millis()); 
+                                        myFile.close(); 
+                                    } 
+                                firstsleepcheck=millis(); 
+                            } 
+                        activState=0;   // establishes low activity state 
+                        if ((millis()-firstsleepcheck)>20000)   //if it has been more than 20 seconds at low, sleepdisplay=TRUE. 
+                            { 
+                                sleepdisplay=TRUE; 
+                            } 
+                    } 
+                else if (avAcl<2.3) //if average accel is not less than 1.4 but less than 2.3, this is moderate activity 
+                    { 
+                        if(activState!=1)   //if it was not previously moderate, then write to SD card! 
+                            { 
+                                 myFile = SD.open("actLOG.txt", FILE_WRITE); 
+                                 if (myFile)  
+                                    { 
+                                         myFile.print("Moderate"); myFile.print(" "); myFile.println(millis()); 
+                                         myFile.close(); 
+                                    } 
+                            } 
+                        activState=1;   // establishes moderate activity state 
+                        sleepdisplay=FALSE; // display will show 
+                    } 
+                else  
+                    { 
+                        if(activState!=2)   //if it was not previously high, then write to SD card! 
+                            { 
+                                 myFile = SD.open("actLOG.txt", FILE_WRITE); 
+                                 if (myFile)  
+                                    { 
+                                         myFile.print("High"); myFile.print(" "); myFile.println(millis()); 
+                                         myFile.close(); 
+                                    } 
+                            } 
+                        activState=2;   // establishes high activity state   
+                        sleepdisplay=FALSE; // display will show 
+                    } 
+                if (millis()-displayswitch>4000)    //every 4 seconds, switch display screen 
+                    { 
+                        displayswitch=millis(); 
+                        if(displayswitcher==3) //if 3, then display 2. if 2, display 3. alternates. 
+                            { 
+                                displayswitcher=2;  
+                            } 
+                        else 
+                            { 
+                                displayswitcher=3; 
+                            } 
+                    } 
+                displayer(displayswitcher, steps, activState); //activate the display.  
+     
+                if((millis()-updatetime)>8000) //every 8 seconds, update the steps on WIFI 
+                    { 
+                        updatetime=millis(); 
+                        if(switcher)    //if true, then switch to false. If false, then switch true in next loop. 
+                            { 
+                                switch(activState) 
+                                    { 
+                                        case 0: 
+                                            Spark.publish("Activity Level","Low"); 
+                                            break; 
+                                        case 1: 
+                                            Spark.publish("Activity Level","Medium"); 
+                                            break; 
+                                        case 2: 
+                                            Spark.publish("Activity Level","High"); 
+                                            break; 
+                                             
+                                    } 
+                                switcher=FALSE; 
+                            } 
+                        else 
+                            { 
+                                Spark.publish("Steps",String(steps)); 
+                                switcher=TRUE; 
+                            } 
+            } 
+     
+    } 
+   
+    delay(50); //reduces total load by giving the device some time to chill. 
+} 
+ 
+ 
+void displayer(int style, int steps, int activity) 
+    { 
+        if(!sleepdisplay) //if sleepdisplay=FALSE, then don't sleep the display!! 
+        { 
+            switch (style) // style=1 is the intro splash screen, 2 is the first screen with most info, 3 is the running count of 
+steps to 10k. 
+            { 
+                case 1: //most of these commands just set the text size, color, and where it prints out.  
+                    display.clearDisplay(); display.setTextSize(2); display.setTextColor(WHITE); display.setCursor(0,0); 
+                    display.println("FITBLING"); 
+                    display.setTextSize(1); display.setTextColor(WHITE); 
+                    display.println("Welcome. Begin.");  
+                    display.println("");  
+                    display.println("Jason Liu/April Pun");  
+                    display.println("BME354 Final Project");  
+                    display.display();     
+                    break; 
+                case 2: //most of these commands just set the text size, color, and where it prints out.  
+                    display.clearDisplay(); display.setTextSize(2); display.setTextColor(WHITE); display.setCursor(0,0); 
+                    switch(activity) 
+                        { 
+                            case 0: 
+                                display.println("Low"); 
+                                break; 
+                            case 1:  
+                                display.println("Moderate"); 
+                                break; 
+                            case 2: 
+                                display.println("High"); 
+                                break; 
+                        } //most of these commands just set the text size, color, and where it prints out.  
+                    display.setTextSize(2); display.setTextColor(WHITE); 
+                    display.print("Steps:"); display.println(steps); 
+                    display.setTextSize(1); display.setTextColor(WHITE); 
+                    display.print("lifetime steps:"); display.println(lifesteps); 
+                    display.print(xyzAccel[0],3); display.print(" "); display.print(xyzAccel[1],3); display.print(" "); 
+display.println(xyzAccel[2],3); 
+                    display.print("distance: "); display.print(steps*2.5/5280,3); display.println("mi"); 
+                    display.display(); // it is assumed that each step is 2.5 feet, and there are 5280 feet in a mile.  
+                    break; 
+                case 3: 
+                    display.clearDisplay(); display.setTextSize(2); display.setTextColor(WHITE); display.setCursor(0,0); 
+                    display.println("STEPS LEFT");  
+                    if(10000>steps) //steps left to get 10000 
+                    { 
+                        display.setTextSize(4); 
+                        display.println(10000-steps); 
+                    } 
+                    else    // if 10000 steps are reached, "DONE :D" is displayed. 
+                    { 
+                        display.setTextSize(3); 
+                        display.println("DONE :D"); 
+                    } 
+                    display.display(); 
+                    break; 
+            } 
+        } 
+        else //if sleepdisplay=TRUE, turn off display.  
+        { 
+            display.clearDisplay(); 
+            display.display(); 
+        } 
+    } 
